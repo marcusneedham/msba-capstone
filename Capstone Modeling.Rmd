@@ -1,0 +1,242 @@
+---
+title: "Modeling"
+author: "Marcus Needham"
+date: "2024-10-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Load necessary libraries
+library(dplyr)
+library(caret)
+library(lubridate)
+library(rpart)
+
+# Load the cleaned data
+rf_data <- read.csv("cleaned_IWC_Work_Orders.csv")
+
+# Convert empty strings or "NA" strings to true NA values if necessary
+rf_data$EQUIPMENT_ID[rf_data$EQUIPMENT_ID == ""] <- NA
+rf_data$EQUIPMENT_ID[rf_data$EQUIPMENT_ID == "NA"] <- NA
+
+# Remove rows with missing EQUIPMENT_ID
+rf_data <- rf_data %>% filter(!is.na(EQUIPMENT_ID))
+
+# Remove unnecessary variables
+rf_data <- rf_data %>% select(-ORDER_ID, -PLANT_ID)
+
+# Confirm the number of rows after filtering
+print(paste("Number of rows remaining after filtering:", nrow(rf_data)))
+```
+
+```{r}
+# Define threshold for downtime to distinguish between minor and major breakdowns
+threshold <- 60  # Breakdowns longer than 60 minutes are considered major
+
+# Create a single target variable 'major_breakdown'
+rf_data$major_breakdown <- ifelse(rf_data$ACTUAL_WORK_IN_MINUTES > threshold, 1, 0)
+
+# Randomly sample 100,000 rows if necessary due to memory constraints
+set.seed(123)
+sampled_data <- rf_data[sample(nrow(rf_data), 100000), ]
+
+# Convert categorical variables to factors
+sampled_data$MAINTENANCE_ACTIVITY_TYPE <- as.factor(sampled_data$MAINTENANCE_ACTIVITY_TYPE)
+
+# Remove rows with any missing values
+sampled_data <- sampled_data[complete.cases(sampled_data), ]
+
+# Confirm that there are no missing values left
+colSums(is.na(sampled_data))
+```
+
+```{r}
+# Split the data into training and testing sets
+set.seed(123)  # For reproducibility
+train_index <- sample(1:nrow(sampled_data), 0.8 * nrow(sampled_data))
+train_data <- sampled_data[train_index, ]
+test_data <- sampled_data[-train_index, ]
+```
+
+```{r}
+# Convert the target variable to a factor for classification
+train_data$major_breakdown <- as.factor(train_data$major_breakdown)
+test_data$major_breakdown <- as.factor(test_data$major_breakdown)
+
+# Build the Random Forest model
+library(randomForest)
+
+rf_model <- randomForest(
+  major_breakdown ~ . - ACTUAL_WORK_IN_MINUTES,  # Exclude the original ACTUAL_WORK_IN_MINUTES column
+  data = train_data,
+  ntree = 100,  # Adjust as needed
+  mtry = 3,     # Adjust based on the number of features
+  importance = TRUE
+)
+
+# Print the model summary
+print(rf_model)
+```
+
+```{r}
+# Predict on the test set
+rf_predictions <- predict(rf_model, test_data)
+
+# Confusion matrix
+library(caret)
+confusionMatrix(rf_predictions, test_data$major_breakdown)
+
+# Calculate accuracy
+accuracy <- mean(rf_predictions == test_data$major_breakdown)
+print(paste("Test Accuracy:", accuracy))
+```
+
+
+```{r}
+# View and plot feature importance
+importance <- importance(rf_model)
+print(importance)
+
+# Plot the feature importance
+varImpPlot(rf_model, main = "Feature Importance for Predicting Major Breakdowns")
+```
+
+```{r}
+# Extract feature importance and convert it into a data frame
+importance_df <- data.frame(
+  Feature = rownames(importance),
+  MeanDecreaseAccuracy = importance[, "MeanDecreaseAccuracy"],
+  MeanDecreaseGini = importance[, "MeanDecreaseGini"]
+)
+
+# Sort by MeanDecreaseAccuracy for better visualization
+importance_df <- importance_df %>% arrange(desc(MeanDecreaseAccuracy))
+
+# Load ggplot2 library
+library(ggplot2)
+
+# Plot the feature importance based on MeanDecreaseAccuracy
+ggplot(importance_df, aes(x = reorder(Feature, MeanDecreaseAccuracy), y = MeanDecreaseAccuracy)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +  # Flip coordinates for horizontal bars
+  labs(
+    title = "Feature Importance: Random Forest",
+    x = "Features",
+    y = "Mean Decrease in Accuracy"
+  ) +
+  theme_minimal()
+
+```
+
+This graph displays the feature importance from a Random Forest model used to predict machine breakdowns. The importance is measured by the "Mean Decrease in Accuracy," which indicates how much the model's predictive accuracy would decrease if the feature were removed.
+
+Key insights include:
+
+Order Description and Execution Dates (Start/Finish) are the most influential predictors, likely capturing detailed contextual or operational information critical to breakdown patterns.
+Maintenance Plan and Maintenance Items also rank high, highlighting the relevance of maintenance scheduling and specific interventions.
+Features like Functional Location and Equipment ID play a moderate role, suggesting spatial or machine-specific factors contribute to breakdown risks.
+These results emphasize the importance of operational and maintenance data in predicting and mitigating machine breakdowns.
+
+
+## Major vs Minor Breakdowns
+
+```{r}
+# Define a variable for breakdown type (Minor or Major)
+threshold <- 60  # Define the threshold for major breakdowns
+rf_data$breakdown_type <- ifelse(rf_data$ACTUAL_WORK_IN_MINUTES > threshold, "Major", "Minor")
+
+# Create a summary table of breakdown counts
+breakdown_counts <- table(rf_data$breakdown_type)
+
+# Print the summary table
+print(breakdown_counts)
+```
+
+```{r}
+# Add proportions to the table
+breakdown_proportions <- prop.table(breakdown_counts) * 100
+
+# Print proportions
+print(breakdown_proportions)
+```
+
+## What makes a machine breakdown
+
+```{r}
+# Define breakdown based on a downtime threshold
+threshold <- 60  # Define breakdown as downtimes over 60 minutes
+rf_data$breakdown <- ifelse(rf_data$ACTUAL_WORK_IN_MINUTES > threshold, 1, 0)
+
+# Convert to factor for classification
+rf_data$breakdown <- as.factor(rf_data$breakdown)
+
+# Remove rows with any missing values for simplicity
+sample_data <- rf_data[complete.cases(rf_data), ]
+
+set.seed(123)  # For reproducibility
+train_index <- sample(1:nrow(sample_data), 0.8 * nrow(sample_data))
+train_data <- sample_data[train_index, ]
+test_data <- sample_data[-train_index, ]
+
+```
+
+```{r}
+# Load the randomForest package
+library(randomForest)
+
+# Train the Random Forest model
+rf_model <- randomForest(
+  breakdown ~ . - ACTUAL_WORK_IN_MINUTES,  # Exclude downtime as it's the basis for breakdown
+  data = train_data,
+  ntree = 100,
+  mtry = 3,
+  importance = TRUE
+)
+
+# Print the model summary
+print(rf_model)
+
+```
+```{r}
+# View and plot feature importance
+importance <- importance(rf_model)
+print(importance)
+
+# Plot feature importance
+varImpPlot(rf_model, main = "Feature Importance for Predicting Machine Breakdowns")
+
+```
+
+Findings from the Random Forest Model
+Model Performance:
+
+The Random Forest model achieved an Out-of-Bag (OOB) error rate of 10.78%, which indicates that the model is performing well overall.
+The confusion matrix reveals:
+Class 0 (no breakdown): High accuracy with 97,908 correct predictions and only 2,172 misclassifications (class error rate: 2.17%).
+Class 1 (breakdown): Lower accuracy with 11,012 correct predictions and 10,983 misclassifications (class error rate: 49.93%).
+The overall class imbalance highlights challenges in correctly predicting breakdowns (Class 1), suggesting that the model may benefit from techniques to address this imbalance, such as oversampling or SMOTE.
+Key Feature Importance:
+
+Top Predictors:
+
+Order Description: The most significant predictor, with the highest Mean Decrease in Accuracy (32.84), indicating its critical role in distinguishing between breakdowns and non-breakdowns.
+Execution Dates: Both Execution Start Date and Execution Finish Date are highly influential, likely capturing temporal patterns or maintenance timing issues contributing to breakdowns.
+Maintenance Plan and Item: These variables indicate the role of planned maintenance and specific maintenance actions in preventing or predicting breakdowns.
+Functional Location and Equipment ID: Features related to the physical location and unique identifiers of machines play a significant role in determining breakdown risks.
+Moderate Predictors:
+
+Maintenance Activity Type: Captures whether the maintenance was planned or unplanned, contributing moderately to the model’s performance.
+Functional Area Nodes: Several functional area nodes exhibit medium importance, likely reflecting how specific operational areas correlate with breakdown likelihood.
+Low-Impact Features:
+
+Equipment Categories and Valid Dates: Features such as EQUIP_CAT_DESC, EQUIP_VALID_FROM, and EQUIP_VALID_TO show limited importance, suggesting they may not add significant predictive value to the model.
+Business Insights:
+
+Breakdown Predictors: The model highlights that Order Description, Execution Dates, and Maintenance Plan are key drivers of breakdowns, suggesting that understanding maintenance workflows and historical records is critical.
+Class Imbalance: While the model performs well for non-breakdowns, it struggles with breakdown predictions. Addressing class imbalance is essential for operational reliability.
+Targeted Maintenance Interventions: By focusing on high-risk orders and maintenance actions, Swire Coca-Cola can reduce the likelihood of unexpected machine breakdowns.
+Recommendations:
+
+Address Class Imbalance: Explore techniques like SMOTE or oversampling to improve breakdown prediction performance (Class 1).
+Investigate Top Features: Analyze the most important predictors (e.g., Order Description, Maintenance Plan) for actionable insights to improve maintenance practices.
+Operationalize the Model: Integrate the Random Forest model into production to provide real-time risk assessments for maintenance teams.
