@@ -1,0 +1,180 @@
+---
+title: "EDA v1"
+author: "Marcus Needham"
+date: "2024-09-18"
+output: html_document
+---
+
+# Introduction
+This report provides an exploratory data analysis (EDA) of Swire Coca-Cola's machine breakdown and downtime data, with a focus on identifying key variables for building a predictive maintenance model. The analysis covers the exploration of machine conditions, parts involved in breakdowns, downtime durations, and trends over time.
+
+# Libraries and Data Loading
+
+```{r setup, include=FALSE}
+# Load required libraries
+library(tidyverse)  # For data manipulation and visualization
+library(lubridate)  # For working with dates and times
+library(ggplot2)    # For data visualization
+```
+
+```{r}
+# Load the dataset
+iwc_data <- read.csv("IWC_Work_Orders_Extract.csv")
+
+# View the structure of the dataset
+str(iwc_data)
+head(iwc_data)
+summary(iwc_data$ACTUAL_WORK_IN_MINUTES)
+```
+
+```{r}
+# Remove rows with missing values in ACTUAL_WORK_IN_MINUTES
+iwc_data_clean <- iwc_data %>%
+  filter(!is.na(ACTUAL_WORK_IN_MINUTES))
+
+# Plot the distribution after cleaning data
+ggplot(iwc_data_clean, aes(x = ACTUAL_WORK_IN_MINUTES)) +
+  geom_histogram(binwidth = 10, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Actual Work in Minutes", 
+       x = "Actual Work (minutes)", 
+       y = "Frequency") +
+  theme_minimal()
+```
+
+This plot shows the overall distribution of actual work times. Most maintenance events fall within a lower range of time, with few outliers at higher durations.
+
+```{r}
+# Remove extreme outliers for better visualization (e.g., work longer than 1000 minutes)
+iwc_data_filtered <- iwc_data_clean %>%
+  filter(ACTUAL_WORK_IN_MINUTES <= 1000)  # Adjust threshold based on data distribution
+
+# Plot after filtering outliers
+ggplot(iwc_data_filtered, aes(x = ACTUAL_WORK_IN_MINUTES)) +
+  geom_histogram(binwidth = 10, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Actual Work in Minutes", 
+       x = "Actual Work (minutes)", 
+       y = "Frequency") +
+  theme_minimal()
+```
+
+Here is the distribution of Actual Work time in minutes. You can see that most of the work on maintenance is below 200 minutes.
+
+```{r}
+# Group by PLANT_ID and count the number of downtimes per plant
+plant_downtime_counts <- iwc_data %>%
+  group_by(PLANT_ID) %>%
+  summarise(downtime_count = n())
+
+# Plot the downtime frequency per plant
+ggplot(plant_downtime_counts, aes(x = reorder(PLANT_ID, -downtime_count), y = downtime_count)) +
+  geom_bar(stat = "identity", fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Frequency of Downtimes by Plant", 
+       x = "Plant ID", 
+       y = "Number of Downtimes") +
+  theme_minimal() +
+  coord_flip()  # Flip the coordinates if the plant names are too long
+```
+
+This bar chart identifies which plants experience the highest frequency of downtime, highlighting potential areas for operational improvement.
+
+### Looking at common causes of downtime
+
+```{r}
+# Group by maintenance description and count occurrences
+common_causes <- iwc_data %>%
+  group_by(ORDER_DESCRIPTION, MAINTENANCE_TYPE_DESCRIPTION) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+# View the top 10 most common causes (all are over 1000)
+head(common_causes, 12)
+```
+
+This the most common causes of maintenance. DTRINE is the highest with over 2,000 cases but the rest are all above 1,000 cases.
+
+```{r}
+common_maintenance_types <- iwc_data %>%
+  group_by(MAINTENANCE_TYPE_DESCRIPTION) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+# View the most common maintenance types
+print(common_maintenance_types)
+```
+
+This shows whether the maintenance was preventative or corrective as most of them are either. 
+
+```{r}
+# Count unplanned vs. planned downtimes
+planned_vs_unplanned <- iwc_data %>%
+  group_by(MAINTENANCE_ACTIVITY_TYPE) %>%
+  summarise(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100) %>%
+  arrange(desc(count))
+
+# View the breakdown of unplanned vs. planned
+print(planned_vs_unplanned)
+```
+
+Unplanned maintenance happens almost 90% of the time over planned maintenance. 
+
+### Time to resolve downtimes
+
+```{r}
+# Calculate mean and median of downtime per location
+avg_downtime_by_location <- iwc_data %>%
+  group_by(PLANT_ID) %>%
+  summarize(
+    mean_downtime = mean(ACTUAL_WORK_IN_MINUTES, na.rm = TRUE),
+    median_downtime = median(ACTUAL_WORK_IN_MINUTES, na.rm = TRUE),
+    count = n()
+  ) %>%
+  arrange(desc(mean_downtime))
+
+# View the result
+print(avg_downtime_by_location)
+
+library(ggplot2)
+
+# Plot average downtime by location
+ggplot(avg_downtime_by_location, aes(x = reorder(PLANT_ID, -mean_downtime), y = mean_downtime)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  theme_minimal() +
+  labs(
+    title = "Average Downtime Duration by Location",
+    x = "Plant ID",
+    y = "Mean Downtime (Minutes)"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+This visualization highlights which locations experience the highest average downtime, enabling targeted interventions to reduce delays. G221 with the most.
+
+```{r}
+# Calculate mean and median downtime by maintenance type
+downtime_by_maintenance_type <- iwc_data %>%
+  group_by(MAINTENANCE_TYPE_DESCRIPTION) %>%
+  summarize(
+    mean_downtime = mean(ACTUAL_WORK_IN_MINUTES, na.rm = TRUE),
+    median_downtime = median(ACTUAL_WORK_IN_MINUTES, na.rm = TRUE),
+    count = n()
+  ) %>%
+  arrange(desc(mean_downtime))
+
+# View the result
+print(downtime_by_maintenance_type)
+
+# Plot downtime by maintenance type
+ggplot(downtime_by_maintenance_type, aes(x = reorder(MAINTENANCE_TYPE_DESCRIPTION, -mean_downtime), y = mean_downtime)) +
+  geom_bar(stat = "identity", fill = "lightcoral") +
+  theme_minimal() +
+  labs(
+    title = "Average Downtime Duration by Maintenance Type",
+    x = "Maintenance Type",
+    y = "Mean Downtime (Minutes)"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Maintenance types with higher average downtime durations represent key areas for process improvement to enhance operational efficiency. Breakdown Maintenance Order is the highest average downtime duration.
+
